@@ -27,6 +27,12 @@ public:
   {
   }
   virtual ~NonhierSphere();
+  double getRadius(){
+    return m_radius;
+  }
+  glm::vec3 getPos(){
+    return m_pos;
+  }
 
 private:
   glm::vec3 m_pos;
@@ -39,7 +45,12 @@ public:
     : m_pos(pos), m_size(size)
   {
   }
-  
+  glm::vec3 getPos(){
+    return m_pos;
+  }
+  double getSize(){
+    return m_size;
+  }
   virtual ~NonhierBox();
 
 private:
