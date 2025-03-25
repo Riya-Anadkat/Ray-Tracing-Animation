@@ -13,42 +13,25 @@ std::unordered_map<SceneNode*, PhongMaterial*> nodeMaterials;
 std::vector<std::pair<SceneNode*, std::pair<glm::vec3, glm::vec3>>> spheres;
 std::vector<std::pair<SceneNode*, std::pair<glm::vec3, glm::vec3>>> cubes;
 std::vector<std::pair<SceneNode*, std::vector<glm::vec3>>> meshes;
-float epislon = 0.01f; 
+float epislon = 0.01f;
 
 struct Ray {
 	glm::vec3 origin;
 	glm::vec3 direction;
 	Ray(const glm::vec3& origin, const glm::vec3& direction) : origin(origin), direction(direction) {}
 };
-// Optional: Helper function if you don't have one
-float simplexNoise(float x, float y) {
-    // This is a placeholder for a proper noise function
-    // You'll need to implement a proper noise function or use a library
-    
-    // Simple placeholder that creates some variation
-    float dx = sin(x * 0.1f) * cos(y * 0.1f) * 10.0f;
-    float dy = cos(x * 0.1f) * sin(y * 0.1f) * 10.0f;
-    
-    return 0.5f + 0.5f * sin(x + dx) * cos(y + dy);
+
+float clamp(float value, float min, float max) {
+	if (value < min) return min;
+	if (value > max) return max;
+	return value;
 }
 
-// Clamp helper function if needed
-float clamp(float value, float min, float max) {
-    if (value < min) return min;
-    if (value > max) return max;
-    return value;
-}
-float smoothstep(float edge0, float edge1, float x) {
-    // Clamp the input to [0,1]
-    float t = clamp((x - edge0) / (edge1 - edge0), 0.0f, 1.0f);
-    // Apply the smoothstep formula
-    return t * t * (3.0f - 2.0f * t);
-}
 bool checkIntresectCube(const glm::vec3& cube_min, const glm::vec3& cube_max, const Ray& ray, float& t_min, glm::vec3& hit_normal) {
 	float t_near = -std::numeric_limits<float>::max();
 	float t_far = std::numeric_limits<float>::max();
-	glm::vec3 allFaceNormals[6] = { {1, 0, 0}, {-1, 0, 0}, 
-	{0, 1, 0}, {0, -1, 0}, 
+	glm::vec3 allFaceNormals[6] = { {1, 0, 0}, {-1, 0, 0},
+	{0, 1, 0}, {0, -1, 0},
 	{0, 0, 1}, {0, 0, -1} };
 
 	float t0, t1;
@@ -77,38 +60,38 @@ bool checkIntresectCube(const glm::vec3& cube_min, const glm::vec3& cube_max, co
 }
 
 bool checkIntersectTriangle(
-    const glm::vec3& v0, const glm::vec3& v1, const glm::vec3& v2, 
-    const Ray& ray, float& hitTime, glm::vec3& hitNormal) 
+	const glm::vec3& v0, const glm::vec3& v1, const glm::vec3& v2,
+	const Ray& ray, float& hitTime, glm::vec3& hitNormal)
 {
-    glm::vec3 edge1 = v1 - v0;
-    glm::vec3 edge2 = v2 - v0;
+	glm::vec3 edge1 = v1 - v0;
+	glm::vec3 edge2 = v2 - v0;
 
-    glm::vec3 surfaceNormal = glm::normalize(glm::cross(edge1, edge2));
+	glm::vec3 surfaceNormal = glm::normalize(glm::cross(edge1, edge2));
 
-    if (glm::dot(surfaceNormal, ray.direction) > 0.0f) {
-        return false; 
-    }
-    glm::vec3 h = glm::cross(ray.direction, edge2);
-    float determinant = glm::dot(edge1, h);
+	if (glm::dot(surfaceNormal, ray.direction) > 0.0f) {
+		return false;
+	}
+	glm::vec3 h = glm::cross(ray.direction, edge2);
+	float determinant = glm::dot(edge1, h);
 
-    if (fabs(determinant) < epislon) return false; 
+	if (fabs(determinant) < epislon) return false;
 
-    float inverseDet = 1.0f / determinant;
-    glm::vec3 s = ray.origin - v0;
-    float u = glm::dot(s, h) * inverseDet;
+	float inverseDet = 1.0f / determinant;
+	glm::vec3 s = ray.origin - v0;
+	float u = glm::dot(s, h) * inverseDet;
 
-    if (u < 0.0f || u > 1.0f) return false; 
+	if (u < 0.0f || u > 1.0f) return false;
 
-    glm::vec3 q = glm::cross(s, edge1);
-    float v = glm::dot(ray.direction, q) * inverseDet;
+	glm::vec3 q = glm::cross(s, edge1);
+	float v = glm::dot(ray.direction, q) * inverseDet;
 
-    if (v < 0.0f || u + v > 1.0f) return false; 
+	if (v < 0.0f || u + v > 1.0f) return false;
 
-    hitTime = glm::dot(edge2, q) * inverseDet;
+	hitTime = glm::dot(edge2, q) * inverseDet;
 
-    if (hitTime < epislon) return false; 
-    hitNormal = surfaceNormal; 
-    return true;
+	if (hitTime < epislon) return false;
+	hitNormal = surfaceNormal;
+	return true;
 }
 
 bool checkintersectMesh(const std::vector<glm::vec3>& triangleVertices, const Ray& ray, float& tMin, glm::vec3& normal) {
@@ -120,9 +103,9 @@ bool checkintersectMesh(const std::vector<glm::vec3>& triangleVertices, const Ra
 		glm::vec3 tempNormal;
 
 		if (checkIntersectTriangle(
-			triangleVertices[i],     
-			triangleVertices[i + 1], 
-			triangleVertices[i + 2], 
+			triangleVertices[i],
+			triangleVertices[i + 1],
+			triangleVertices[i + 2],
 			ray, t, tempNormal) && t < tMin) {
 
 			tMin = t;
@@ -171,7 +154,7 @@ bool shouldBeInShadow(const glm::vec3& hitpoint, const glm::vec3& lightpos) {
 	for (const auto& [node, sphere] : spheres) {
 		float t;
 		if (checkIntersectSpheres(sphere.first, sphere.second, shadowray, t) && t < lightdistance) {
-			return true; 
+			return true;
 		}
 	}
 
@@ -179,7 +162,7 @@ bool shouldBeInShadow(const glm::vec3& hitpoint, const glm::vec3& lightpos) {
 		float t;
 		glm::vec3 normal;
 		if (checkIntresectCube(cube.first, cube.second, shadowray, t, normal) && t < lightdistance) {
-			return true; 
+			return true;
 		}
 	}
 
@@ -187,11 +170,11 @@ bool shouldBeInShadow(const glm::vec3& hitpoint, const glm::vec3& lightpos) {
 		float t;
 		glm::vec3 normal;
 		if (checkintersectMesh(triangleVertices, shadowray, t, normal) && t < lightdistance) {
-			return true; 
+			return true;
 		}
 	}
 
-	return false; 
+	return false;
 }
 
 void getNodes(SceneNode* node, glm::mat4 transform = glm::mat4(1.0f)) {
@@ -199,9 +182,9 @@ void getNodes(SceneNode* node, glm::mat4 transform = glm::mat4(1.0f)) {
 	glm::mat4 currentTransform = transform * node->trans;
 
 	glm::vec3 scale(
-		glm::length(glm::vec3( currentTransform[0])),
-		glm::length(glm::vec3( currentTransform[1])),
-		glm::length(glm::vec3( currentTransform[2]))
+		glm::length(glm::vec3(currentTransform[0])),
+		glm::length(glm::vec3(currentTransform[1])),
+		glm::length(glm::vec3(currentTransform[2]))
 	);
 
 	if (node->m_nodeType == NodeType::GeometryNode) {
@@ -239,7 +222,7 @@ void getNodes(SceneNode* node, glm::mat4 transform = glm::mat4(1.0f)) {
 			}
 
 			meshes.emplace_back(geometryNode, transformedTriangles);
-			nodeMaterials[geometryNode] =  static_cast<PhongMaterial*>(geometryNode->m_material);
+			nodeMaterials[geometryNode] = static_cast<PhongMaterial*>(geometryNode->m_material);
 		}
 	}
 
@@ -250,24 +233,24 @@ void getNodes(SceneNode* node, glm::mat4 transform = glm::mat4(1.0f)) {
 }
 
 void A4_Render(
-		// What to render  
-		SceneNode * root,
+	// What to render  
+	SceneNode* root,
 
-		// Image to write to, set to a given width and height  
-		Image & image,
+	// Image to write to, set to a given width and height  
+	Image& image,
 
-		// Viewing parameters  
-		const glm::vec3 & eye,
-		const glm::vec3 & view,
-		const glm::vec3 & up,
-		double fovy,
+	// Viewing parameters  
+	const glm::vec3& eye,
+	const glm::vec3& view,
+	const glm::vec3& up,
+	double fovy,
 
-		// Lighting parameters  
-		const glm::vec3 & ambient,
-		const std::list<Light *> & lights
+	// Lighting parameters  
+	const glm::vec3& ambient,
+	const std::list<Light*>& lights
 ) {
 
-  // Fill in raytracing code here... 
+	// Fill in raytracing code here... 
 	size_t width = image.width();
 	size_t height = image.height();
 	float aspect = width / (float)height;
@@ -289,6 +272,7 @@ void A4_Render(
 			float closest_t = std::numeric_limits<float>::max();
 			glm::vec3 hit_normal, hit_point;
 			PhongMaterial* phongMaterial = nullptr;
+			glm::vec3 mod_color = glm::vec3(0.0f);
 
 			for (const auto& [node, sphere] : spheres) {
 				float t;
@@ -308,6 +292,58 @@ void A4_Render(
 					hit_point = ray.origin + t * ray.direction;
 					hit_normal = cube_normal;
 					phongMaterial = nodeMaterials[node];
+					mod_color = phongMaterial->m_kd;
+
+					glm::vec3 local_hit = hit_point - cube.first;
+					glm::vec3 cube_size = cube.second - cube.first;
+
+					glm::vec3 uv = local_hit / cube_size;
+
+					auto fract = [](float x) { return x - floor(x); };
+
+					int windows_per_face = 10;
+					float window_unit = 1.0f / windows_per_face;
+					float window_size = window_unit * 0.6f;
+
+					bool is_window = false;
+
+					int tile_x = 0, tile_y = 0;
+
+					if (glm::abs(hit_normal.x) > 0.9f) {
+						tile_x = int(uv.y / window_unit);
+						tile_y = int(uv.z / window_unit);
+						is_window = fract(uv.y / window_unit) < (window_size / window_unit) &&
+							fract(uv.z / window_unit) < (window_size / window_unit);
+					}
+					else if (glm::abs(hit_normal.y) > 0.9f) {
+						tile_x = int(uv.x / window_unit);
+						tile_y = int(uv.z / window_unit);
+						is_window = fract(uv.x / window_unit) < (window_size / window_unit) &&
+							fract(uv.z / window_unit) < (window_size / window_unit);
+					}
+					else if (glm::abs(hit_normal.z) > 0.9f) {
+						tile_x = int(uv.x / window_unit);
+						tile_y = int(uv.y / window_unit);
+						is_window = fract(uv.x / window_unit) < (window_size / window_unit) &&
+							fract(uv.y / window_unit) < (window_size / window_unit);
+					}
+
+					int seed = int(cube.first.x + cube.first.y + cube.first.z + tile_x * 13 + tile_y * 17);
+					float rand = fract(sin(seed * 91.345f) * 47453.0f);
+
+					bool is_lit = rand < 0.3f;
+
+					if (is_window) {
+						if (is_lit) {
+							mod_color = glm::vec3(1.0f, 0.85f, 0.6f);
+						}
+						else {
+							mod_color *= 0.4f;
+						}
+					}
+					else {
+						mod_color *= 0.8f;
+					}
 				}
 			}
 			for (const auto& [node, triangleVertices] : meshes) {
@@ -329,10 +365,11 @@ void A4_Render(
 				}
 			}
 			if (closest_t < std::numeric_limits<float>::max() && phongMaterial) {
-				glm::vec3 color = phongMaterial->m_kd * ambient; 
-
+				glm::vec3 color = phongMaterial->m_kd * ambient;
+				if (mod_color != glm::vec3(0.0f)) {
+					color = mod_color * ambient;
+				}
 				for (const Light* light : lights) {
-					// printf("light: %s\n", light->name.c_str());
 					if (!shouldBeInShadow(hit_point, light->position)) {
 						glm::vec3 light_dir = glm::normalize(light->position - hit_point);
 						float diff = glm::max(glm::dot(hit_normal, light_dir), 0.0f);
@@ -354,71 +391,30 @@ void A4_Render(
 				image(x, y, 2) = color.b;
 			}
 			else {
-				// float t = py * 0.5f + 0.5f;
+				float t = py * 0.5f + 0.5f;
 
-				// glm::vec3 sunset_top = glm::vec3(1.0, 0.4, 0.6);
-				// glm::vec3 sunset_middle = glm::vec3(1.0, 0.6, 0.2);
-				// glm::vec3 sunset_bottom = glm::vec3(1.0, 1.0, 0.4);
+				glm::vec3 sky_top = glm::vec3(1.0, 0.55, 0.25);
+				glm::vec3 sky_bottom = glm::vec3(0.6, 0.8, 1.0);
 
-				// if (t < 0.5) {
-				// 	image(x, y, 0) = (1 - t * 2) * sunset_top.r + (t * 2) * sunset_middle.r;
-				// 	image(x, y, 1) = (1 - t * 2) * sunset_top.g + (t * 2) * sunset_middle.g;
-				// 	image(x, y, 2) = (1 - t * 2) * sunset_top.b + (t * 2) * sunset_middle.b;
-				// }
-				// else {
-				// 	t = (t - 0.5) * 2;
-				// 	image(x, y, 0) = (1 - t) * sunset_middle.r + t * sunset_bottom.r;
-				// 	image(x, y, 1) = (1 - t) * sunset_middle.g + t * sunset_bottom.g;
-				// 	image(x, y, 2) = (1 - t) * sunset_middle.b + t * sunset_bottom.b;
-				// }
+				glm::vec3 sky_color = (1.0f - t) * sky_top + t * sky_bottom;
 
-// Light blue sky with clouds
-float t = py * 0.5f + 0.5f;
+				float cloud = 0.0f;
 
-// Sky colors - from lighter blue at top to slightly darker at bottom
-glm::vec3 sky_top = glm::vec3(0.5, 0.7, 1.0);      // Light blue
-glm::vec3 sky_bottom = glm::vec3(0.7, 0.8, 1.0);   // Even lighter blue near horizon
+				cloud += 0.2f * sin(py * 40.0f + 0.5f * sin(px * 10.0f));
+				cloud += 0.1f * sin(py * 60.0f + 2.0f * px);
+				cloud *= 1.0f - px;
+				float verticalGradient = 1.0f + 0.5f * px;
+				cloud += 0.1f * sin((py + verticalGradient) * 40.0f + 0.5f * sin(px * 10.0f));
+				cloud += 0.05f * sin((py + verticalGradient) * 60.0f + 2.0f * px);
 
-// Base sky gradient
-glm::vec3 sky_color = (1.0f - t) * sky_top + t * sky_bottom;
+				cloud = clamp(cloud, 0.0f, 1.0f);
 
-// Cloud function - using a simple noise function
-float cloud_density = 0.0f;
+				glm::vec3 cloud_color = glm::vec3(1.0f, 1.0f, 1.0f);
+				glm::vec3 final_color = mix(sky_color, cloud_color, cloud);
 
-// Simple noise-based clouds
-// px and py should be normalized screen coordinates
-float noise_scale = 8.0f;
-float cloud_x = px * noise_scale;
-float cloud_y = py * noise_scale;
-
-// Simplex noise function (you'll need to implement or include a noise library)
-// This is a placeholder - replace with your actual noise function
-float noise_val = simplexNoise(cloud_x, cloud_y);
-float noise_val2 = simplexNoise(cloud_x * 2.0f + 1.3f, cloud_y * 2.0f + 2.4f) * 0.5f;
-
-// Combine different noise frequencies for more natural clouds
-cloud_density = noise_val + noise_val2;
-
-// Make clouds appear only in upper part of sky and fade out near horizon
-float cloud_height_mask = 1.0f - (py * 1.5f + 0.2f);
-cloud_height_mask = clamp(cloud_height_mask, 0.0f, 1.0f);
-
-// Cloud shape threshold and softness
-float cloud_threshold = 0.55f;
-float cloud_softness = 0.1f;
-float cloud_amount = smoothstep(cloud_threshold, cloud_threshold + cloud_softness, 
-                               cloud_density * cloud_height_mask);
-
-// Cloud color (white with slight blueish tint)
-glm::vec3 cloud_color = glm::vec3(1.0f, 1.0f, 1.0f);
-
-// Blend sky and clouds
-glm::vec3 final_color = mix(sky_color, cloud_color, cloud_amount);
-
-// Write to image
-image(x, y, 0) = final_color.r;
-image(x, y, 1) = final_color.g;
-image(x, y, 2) = final_color.b;
+				image(x, y, 0) = final_color.r;
+				image(x, y, 1) = final_color.g;
+				image(x, y, 2) = final_color.b;
 			}
 		}
 	}
