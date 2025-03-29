@@ -19,9 +19,15 @@ glass_light10 = gr.material({170/255, 196/255, 255/255}, {0.8, 0.8, 0.9}, 50, 0.
 glass_light11 = gr.material({160/255, 200/255, 255/255}, {0.8, 0.8, 0.9}, 50, 0.0, 1.5)
 
 blue_light = gr.material({0.2, 0.4, 1.0}, {0.5, 0.5, 0.5}, 50, 0.0, 1.5)  -- Blue light buildings
+black_light = gr.material({0.1, 0.1, 0.1}, {0.5, 0.5, 0.5}, 50, 0.0, 1.5)  -- Black light buildings
+grey_light = gr.material({0.3, 0.3, 0.3}, {0.2, 0.2, 0.2}, 10, 0.0, 1.5)  -- Grey matte buildings
+yellow_light = gr.material({0.9, 0.9, 0.1}, {0.2, 0.2, 0.2}, 10, 0.0, 1.5)  -- Yellow matte buildings
+mat4 = gr.material({0.7, 0.6, 1.0}, {0.5, 0.4, 0.8}, 25)
+red_light = gr.material({1.0, 0.2, 0.2}, {0.5, 0.5, 0.5}, 50, 0.0, 1.5)  -- Red light buildings
 
 scene_root = gr.node('root')
 -- scene_root:translate(0, 0, 120)
+-- scene_root:rotate('Y', 3.0)
 -- scene_root:translate(0, 0, -20)
 
 plane = gr.mesh( 'plane', 'plane.obj' )
@@ -33,7 +39,7 @@ plane:translate(0, -30, -100)
 road = gr.mesh('road', 'plane.obj')
 scene_root:add_child(road)
 road:set_material(dark_concrete)
-road:scale(15, 1, 1000)
+road:scale(17, 1, 1000)
 road:translate(0, -29, -100)
 
 b1 = gr.nh_box('b1', {-45, -20, 720}, 20)
@@ -61,7 +67,7 @@ b5:scale(1.0, 2.0, 1.0)
 scene_root:add_child(b5)
 b5:set_material(glass_light8)
 
-b6 = gr.nh_box('b6', {-70, -25, 600}, 45)
+b6 = gr.nh_box('b6', {-70, -30, 600}, 45)
 b6:scale(1.0, 0.9, 1.0)
 scene_root:add_child(b6)
 b6:set_material(glass_light6)
@@ -91,36 +97,41 @@ b25:scale(1.0, 7, 1.0)
 scene_root:add_child(b25)
 b25:set_material(glass_light5)
 
--- for i = 5, 20 do
--- 	local x = -370 + (i - 10) * 60
--- 	local y = -((i - 14) >= 0 and (i - 14) or -(i - 14)) - 6
--- 	local scale_y = 5 + (i % 4)
--- 	local box = gr.nh_box('b' .. i, {x, y, -50}, 40)
--- 	box:scale(1.0, scale_y, 1.0)
--- 	scene_root:add_child(box)
--- 	box:set_material(glass_light9)
--- end
-
 for j = 30, 50 do
 	local i = j - 20
 	local x = -500 + (i - 10) * 80
-	local y = -((i - 14) >= 0 and (i - 14) or -(i - 14)) - 2
+	local y = -((i - 14) >= 0 and (i - 14) or -(i - 14)) - 3
 	local scale_y = 5 + (i % 3)
-	local box = gr.nh_box('b' .. j, {x, y, -250}, 50)
+	local box = gr.nh_box('b' .. j, {x, y, -350}, 50)
 	box:scale(1.0, scale_y, 1.0)
 	scene_root:add_child(box)
 	box:set_material(glass_light10)
 end
 
-sunlight = gr.light({1000.0, 800.0, 1000.0}, {0.9, 0.9, 0.8}, {1, 0, 0})
-evening_light = gr.light({-800.0, 300.0, 800.0}, {0.6, 0.3, 0.1}, {1, 0, 0})
-city_glow = gr.light({0.0, 100.0, 500.0}, {0.3, 0.3, 0.5}, {1, 0, 0})
-building_light = gr.light({0.0, 100.0, 500.0}, {0.9, 0.6, 0.4}, {1, 0, 0})
+car1 = gr.mesh('car1', 'car.obj')
+scene_root:add_child(car1)
+car1:set_material(black_light)
+car1:translate(140, -178, 650)
+car1:scale(0.75,0.75,0.75)
+
 
 white_light = gr.light({-100.0, -30.0, 750.0}, {0.9, 0.9, 0.9}, {1, 0, 0})
 
-sunset_light = gr.light({-250.0, 30.0, 900.0}, {0.5, 0.25, 0.0}, {1, 0, 0})
+sun_lights = {}
+for i = 1, 240 do
+	local intensity
+	local color
+	if i <= 120 then
+		intensity = 0.5 - (i - 1) * (0.5 / 119)  -- Gradually decrease intensity for the first 120
+		color = {intensity, intensity * 0.5, 0.0}  -- Adjust color to simulate sunset
+	else
+			intensity = 0.0  -- Keep it dark after sunset
+			color = {0.0, 0.0, 0.0}  -- Simulate complete darkness
+		end
+	sun_lights[i] = gr.light({-750.0, 30.0, 900.0}, color, {1, 0, 0})
+end
 
-gr.render(scene_root, 'scene0.png', 500, 400,
+-- frame 0143
+gr.render(scene_root, 'frames/frame_0000.png', 500, 500,
 	  {0, 0, 800}, {0, 0, -1}, {0, 1, 0}, 50,
-	  {0.3, 0.3, 0.3}, {white_light, sunset_light})
+	  {0.3, 0.3, 0.3}, {white_light, sun_lights[140]})

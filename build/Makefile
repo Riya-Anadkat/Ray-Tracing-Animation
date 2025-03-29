@@ -26,9 +26,9 @@ ifeq ($(config),debug)
   DEFINES   += -DDEBUG
   INCLUDES  += -I../../shared -I../../shared/include -I../../shared/gl3w -I../../shared/imgui
   CPPFLAGS  += -MMD -MP $(DEFINES) $(INCLUDES)
-  CFLAGS    += $(CPPFLAGS) $(ARCH) -g -std=c++14
-  CXXFLAGS  += $(CFLAGS) 
-  LDFLAGS   += -L../../lib
+  CFLAGS    += $(CPPFLAGS) $(ARCH) -g -std=c++14 -fopenmp
+  CXXFLAGS  += $(CFLAGS)
+  LDFLAGS   += -L../../lib -fopenmp
   LIBS      += -lcs488-framework -llua -llodepng -lstdc++ -ldl -lpthread
   RESFLAGS  += $(DEFINES) $(INCLUDES) 
   LDDEPS    += 

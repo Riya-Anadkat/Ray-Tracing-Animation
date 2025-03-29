@@ -2,24 +2,80 @@
 
 #include <glm/ext.hpp>
 #include <vector>
+#include <fstream>
 #include <unordered_map>
 
 #include "A4.hpp"
 #include "GeometryNode.hpp"
 #include "PhongMaterial.hpp"
 #include "Mesh.hpp"
+#include <omp.h>
 
+#include <algorithm>
+
+bool reflection_flag = true;
+
+struct BVHNode {
+	glm::vec3 bbox_min, bbox_max;
+	BVHNode* left = nullptr;
+	BVHNode* right = nullptr;
+	std::vector<glm::vec3> triangles;
+
+	bool isLeaf() const {
+		return left == nullptr && right == nullptr;
+	}
+};
 std::unordered_map<SceneNode*, PhongMaterial*> nodeMaterials;
 std::vector<std::pair<SceneNode*, std::pair<glm::vec3, glm::vec3>>> spheres;
 std::vector<std::pair<SceneNode*, std::pair<glm::vec3, glm::vec3>>> cubes;
 std::vector<std::pair<SceneNode*, std::vector<glm::vec3>>> meshes;
+std::vector<std::pair<SceneNode*, BVHNode*>> meshBVHs;
+
 float epislon = 0.01f;
+
+struct Texture {
+	int width, height;
+	std::vector<glm::vec3> data;
+};
 
 struct Ray {
 	glm::vec3 origin;
 	glm::vec3 direction;
 	Ray(const glm::vec3& origin, const glm::vec3& direction) : origin(origin), direction(direction) {}
 };
+
+glm::vec3 sampleTexture(const Texture& tex, float u, float v) {
+	u = glm::clamp(u, 0.0f, 1.0f);
+	v = glm::clamp(v, 0.0f, 1.0f);
+	int x = int(u * (tex.width - 1));
+	int y = int(v * (tex.height - 1));
+	return tex.data[y * tex.width + x];  // row-major order
+}
+
+Texture loadPPM(const std::string& filename) {
+	std::ifstream file(filename);
+	if (!file.is_open()) {
+		throw std::runtime_error("Failed to open texture file.");
+	}
+
+	std::string format;
+	file >> format;
+	if (format != "P3") {
+		throw std::runtime_error("Only ASCII PPM (P3) format is supported.");
+	}
+
+	Texture texture;
+	int maxval;
+	file >> texture.width >> texture.height >> maxval;
+
+	texture.data.resize(texture.width * texture.height);
+	for (int i = 0; i < texture.width * texture.height; ++i) {
+		int r, g, b;
+		file >> r >> g >> b;
+		texture.data[i] = glm::vec3(r, g, b) / 255.0f;
+	}
+	return texture;
+}
 
 float clamp(float value, float min, float max) {
 	if (value < min) return min;
@@ -145,6 +201,104 @@ bool checkIntersectSpheres(const glm::vec3& center, const glm::vec3& radii, cons
 
 	return false;
 }
+
+BVHNode* buildBVH(std::vector<glm::vec3>& triangles, int depth = 0, int max_leaf_triangles = 6) {
+	BVHNode* node = new BVHNode();
+
+	node->bbox_min = node->bbox_max = triangles[0];
+	for (size_t i = 0; i < triangles.size(); ++i) {
+		node->bbox_min = glm::min(node->bbox_min, triangles[i]);
+		node->bbox_max = glm::max(node->bbox_max, triangles[i]);
+	}
+
+	if (triangles.size() <= max_leaf_triangles * 3) {
+		node->triangles = triangles;
+		return node;
+	}
+
+	glm::vec3 extent = node->bbox_max - node->bbox_min;
+	int axis = 0;
+	if (extent.y > extent.x && extent.y > extent.z) axis = 1;
+	else if (extent.z > extent.x && extent.z > extent.y) axis = 2;
+
+	std::vector<std::pair<glm::vec3, size_t>> centers;
+	for (size_t i = 0; i < triangles.size(); i += 3) {
+		glm::vec3 center = (triangles[i] + triangles[i + 1] + triangles[i + 2]) / 3.0f;
+		centers.emplace_back(center, i);
+	}
+
+	std::sort(centers.begin(), centers.end(), [axis](const auto& a, const auto& b) {
+		return a.first[axis] < b.first[axis];
+		});
+
+	std::vector<glm::vec3> left_tris, right_tris;
+	size_t mid = centers.size() / 2;
+	for (size_t i = 0; i < centers.size(); ++i) {
+		size_t idx = centers[i].second;
+		glm::vec3 v0 = triangles[idx];
+		glm::vec3 v1 = triangles[idx + 1];
+		glm::vec3 v2 = triangles[idx + 2];
+		if (i < mid) {
+			left_tris.push_back(v0);
+			left_tris.push_back(v1);
+			left_tris.push_back(v2);
+		}
+		else {
+			right_tris.push_back(v0);
+			right_tris.push_back(v1);
+			right_tris.push_back(v2);
+		}
+	}
+
+	node->left = buildBVH(left_tris, depth + 1, max_leaf_triangles);
+	node->right = buildBVH(right_tris, depth + 1, max_leaf_triangles);
+	return node;
+}
+
+
+bool rayIntersectsAABB(const Ray& ray, const glm::vec3& minB, const glm::vec3& maxB) {
+	float tmin = (minB.x - ray.origin.x) / ray.direction.x;
+	float tmax = (maxB.x - ray.origin.x) / ray.direction.x;
+	if (tmin > tmax) std::swap(tmin, tmax);
+
+	float tymin = (minB.y - ray.origin.y) / ray.direction.y;
+	float tymax = (maxB.y - ray.origin.y) / ray.direction.y;
+	if (tymin > tymax) std::swap(tymin, tymax);
+
+	if ((tmin > tymax) || (tymin > tmax)) return false;
+	if (tymin > tmin) tmin = tymin;
+	if (tymax < tmax) tmax = tymax;
+
+	float tzmin = (minB.z - ray.origin.z) / ray.direction.z;
+	float tzmax = (maxB.z - ray.origin.z) / ray.direction.z;
+	if (tzmin > tzmax) std::swap(tzmin, tzmax);
+
+	return !(tmin > tzmax || tzmin > tmax);
+}
+
+bool intersectBVH(BVHNode* node, const Ray& ray, float& closest_t, glm::vec3& hitNormal, glm::vec3& hitPoint) {
+	if (!rayIntersectsAABB(ray, node->bbox_min, node->bbox_max)) return false;
+
+	bool hit = false;
+	if (node->isLeaf()) {
+		for (size_t i = 0; i < node->triangles.size(); i += 3) {
+			float t;
+			glm::vec3 normal;
+			if (checkIntersectTriangle(node->triangles[i], node->triangles[i + 1], node->triangles[i + 2], ray, t, normal) && t < closest_t) {
+				closest_t = t;
+				hitNormal = normal;
+				hitPoint = ray.origin + t * ray.direction;
+				hit = true;
+			}
+		}
+	}
+	else {
+		glm::vec3 tempNormal, tempPoint;
+		if (intersectBVH(node->left, ray, closest_t, hitNormal, hitPoint)) hit = true;
+		if (intersectBVH(node->right, ray, closest_t, hitNormal, hitPoint)) hit = true;
+	}
+	return hit;
+}
 bool shouldBeInShadow(const glm::vec3& hitpoint, const glm::vec3& lightpos) {
 	glm::vec3 lightdir = glm::normalize(lightpos - hitpoint);
 	Ray shadowray(hitpoint + epislon * lightdir, lightdir);
@@ -173,10 +327,15 @@ bool shouldBeInShadow(const glm::vec3& hitpoint, const glm::vec3& lightpos) {
 			return true;
 		}
 	}
-
+	for (const auto& [node, bvh] : meshBVHs) {
+		float t;
+		glm::vec3 normal, pt;
+		if (intersectBVH(bvh, shadowray, t, normal, pt) && t < lightdistance) {
+			return true;
+		}
+	}
 	return false;
 }
-
 void getNodes(SceneNode* node, glm::mat4 transform = glm::mat4(1.0f)) {
 	// printf("node: %s\n", node->m_name.c_str());
 	glm::mat4 currentTransform = transform * node->trans;
@@ -207,11 +366,20 @@ void getNodes(SceneNode* node, glm::mat4 transform = glm::mat4(1.0f)) {
 		}
 
 		if (auto* mesh = dynamic_cast<Mesh*>(geometryNode->m_primitive)) {
-			// printf("mesh: %s\n", mesh->m_name.c_str());
 			std::vector<glm::vec3> transformedTriangles;
 			glm::mat3 normalMatrix = glm::transpose(glm::inverse(glm::mat3(currentTransform)));
 
+			size_t num_vertices = mesh->m_vertices.size();
+
 			for (const auto& triangle : mesh->m_faces) {
+		
+				if (triangle.v1 >= num_vertices || triangle.v2 >= num_vertices || triangle.v3 >= num_vertices) {
+					std::cerr << "Invalid triangle indices in mesh: "
+						<< triangle.v1 << ", " << triangle.v2 << ", " << triangle.v3
+						<< " (vertex count: " << num_vertices << ")" << std::endl;
+					continue; 
+				}
+
 				glm::vec3 v0 = glm::vec3(currentTransform * glm::vec4(mesh->m_vertices[triangle.v1], 1.0f));
 				glm::vec3 v1 = glm::vec3(currentTransform * glm::vec4(mesh->m_vertices[triangle.v2], 1.0f));
 				glm::vec3 v2 = glm::vec3(currentTransform * glm::vec4(mesh->m_vertices[triangle.v3], 1.0f));
@@ -220,10 +388,17 @@ void getNodes(SceneNode* node, glm::mat4 transform = glm::mat4(1.0f)) {
 				transformedTriangles.push_back(v1);
 				transformedTriangles.push_back(v2);
 			}
+			BVHNode* bvh = buildBVH(transformedTriangles);
+			if (geometryNode->m_name[0] == 's' || geometryNode->m_name[0] == 'c') {
+				meshBVHs.emplace_back(geometryNode, bvh);
+			}
 
-			meshes.emplace_back(geometryNode, transformedTriangles);
+			else {
+				meshes.emplace_back(geometryNode, transformedTriangles);
+			}
 			nodeMaterials[geometryNode] = static_cast<PhongMaterial*>(geometryNode->m_material);
 		}
+
 	}
 
 	for (SceneNode* child : node->children) {
@@ -249,8 +424,15 @@ void A4_Render(
 	const glm::vec3& ambient,
 	const std::list<Light*>& lights
 ) {
+	spheres.clear();
+	cubes.clear();
+	meshes.clear();
+	meshBVHs.clear();
+	nodeMaterials.clear();
 
-	// Fill in raytracing code here... 
+	Texture* brickTex = new Texture(loadPPM("brick_texture.ppm"));
+	Texture* spidermanTex = new Texture(loadPPM("spiderman_suit.ppm"));
+
 	size_t width = image.width();
 	size_t height = image.height();
 	float aspect = width / (float)height;
@@ -262,8 +444,15 @@ void A4_Render(
 
 	getNodes(root);
 
-	for (size_t y = 0; y < height; y++) {
-		for (size_t x = 0; x < width; x++) {
+	// for (size_t y = 0; y < height; y++) {
+	omp_set_num_threads(100);
+#pragma omp parallel for schedule(dynamic)
+	for (int y = 0; y < static_cast<int>(height); y++) {
+		int thread_id = omp_get_thread_num();
+		// printf("Row %d computed by thread %d\n", y, thread_id);
+
+		for (int x = 0; x < static_cast<int>(width); x++) {
+
 			float px = (2 * (x + 0.5) / (float)width - 1) * aspect * scale;
 			float py = (1 - 2 * (y + 0.5) / (float)height) * scale;
 			glm::vec3 dir = glm::normalize(px * u + py * v - w);
@@ -273,6 +462,7 @@ void A4_Render(
 			glm::vec3 hit_normal, hit_point;
 			PhongMaterial* phongMaterial = nullptr;
 			glm::vec3 mod_color = glm::vec3(0.0f);
+			bool use_colour_flag = false;
 
 			for (const auto& [node, sphere] : spheres) {
 				float t;
@@ -292,61 +482,95 @@ void A4_Render(
 					hit_point = ray.origin + t * ray.direction;
 					hit_normal = cube_normal;
 					phongMaterial = nodeMaterials[node];
-					mod_color = phongMaterial->m_kd;
+					// printf("cube name: %s\n", node->m_name.c_str());
+					if (node->m_name[0] == 'b') {
 
-					glm::vec3 local_hit = hit_point - cube.first;
-					glm::vec3 cube_size = cube.second - cube.first;
+						use_colour_flag = true;
+						mod_color = phongMaterial->m_kd;
 
-					glm::vec3 uv = local_hit / cube_size;
 
-					auto fract = [](float x) { return x - floor(x); };
+						glm::vec3 local_hit = hit_point - cube.first;
+						glm::vec3 cube_size = cube.second - cube.first;
 
-					int windows_per_face = 10;
-					float window_unit = 1.0f / windows_per_face;
-					float window_size = window_unit * 0.6f;
+						glm::vec3 uv = local_hit / cube_size;
+						float u = 0.0f, v = 0.0f;
+						auto fract = [](float x) { return x - floor(x); };
 
-					bool is_window = false;
+						int windows_per_face = 10;
+						float window_unit = 1.0f / windows_per_face;
+						float window_size = window_unit * 0.6f;
 
-					int tile_x = 0, tile_y = 0;
+						bool is_window = false;
 
-					if (glm::abs(hit_normal.x) > 0.9f) {
-						tile_x = int(uv.y / window_unit);
-						tile_y = int(uv.z / window_unit);
-						is_window = fract(uv.y / window_unit) < (window_size / window_unit) &&
-							fract(uv.z / window_unit) < (window_size / window_unit);
-					}
-					else if (glm::abs(hit_normal.y) > 0.9f) {
-						tile_x = int(uv.x / window_unit);
-						tile_y = int(uv.z / window_unit);
-						is_window = fract(uv.x / window_unit) < (window_size / window_unit) &&
-							fract(uv.z / window_unit) < (window_size / window_unit);
-					}
-					else if (glm::abs(hit_normal.z) > 0.9f) {
-						tile_x = int(uv.x / window_unit);
-						tile_y = int(uv.y / window_unit);
-						is_window = fract(uv.x / window_unit) < (window_size / window_unit) &&
-							fract(uv.y / window_unit) < (window_size / window_unit);
-					}
+						int tile_x = 0, tile_y = 0;
 
-					int seed = int(cube.first.x + cube.first.y + cube.first.z + tile_x * 13 + tile_y * 17);
-					float rand = fract(sin(seed * 91.345f) * 47453.0f);
+						if (glm::abs(hit_normal.x) > 0.9f) {
+							u = uv.z;
+							v = uv.y;
+							tile_x = int(uv.y / window_unit);
+							tile_y = int(uv.z / window_unit);
+							is_window = fract(uv.y / window_unit) < (window_size / window_unit) &&
+								fract(uv.z / window_unit) < (window_size / window_unit);
+						}
+						else if (glm::abs(hit_normal.y) > 0.9f) {
+							u = uv.x;
+							v = uv.z;
+							tile_x = int(uv.x / window_unit);
+							tile_y = int(uv.z / window_unit);
+							is_window = fract(uv.x / window_unit) < (window_size / window_unit) &&
+								fract(uv.z / window_unit) < (window_size / window_unit);
+						}
+						else if (glm::abs(hit_normal.z) > 0.9f) {
+							u = uv.x;
+							v = uv.y;
+							tile_x = int(uv.x / window_unit);
+							tile_y = int(uv.y / window_unit);
+							is_window = fract(uv.x / window_unit) < (window_size / window_unit) &&
+								fract(uv.y / window_unit) < (window_size / window_unit);
+						}
 
-					bool is_lit = rand < 0.3f;
+						int seed = int(cube.first.x + cube.first.y + cube.first.z + tile_x * 13 + tile_y * 17);
+						float rand = fract(sin(seed * 91.345f) * 47453.0f);
 
-					if (is_window) {
-						if (is_lit) {
-							mod_color = glm::vec3(1.0f, 0.85f, 0.6f);
+						bool is_lit = rand < 0.3f;
+
+						if (is_window) {
+							if (is_lit) {
+								mod_color = glm::vec3(1.0f, 0.85f, 0.6f);
+							}
+							else {
+								mod_color *= 0.4f;
+							}
 						}
 						else {
-							mod_color *= 0.4f;
+							// mod_color *= 0.8f;
+							mod_color = 0.5 * mod_color + 0.5 * sampleTexture(*brickTex, u, v);
 						}
 					}
-					else {
-						mod_color *= 0.8f;
+				}
+			}
+			for (const auto& [node, bvh] : meshBVHs) {
+				if (intersectBVH(bvh, ray, closest_t, hit_normal, hit_point)) {
+					phongMaterial = nodeMaterials[node];
+					// printf("mesh: %s\n", node->m_name.c_str());
+					if (node->m_name[0] == 's') {
+						mod_color = phongMaterial->m_kd;
+						use_colour_flag = true;
+						// glm::vec3 local_hit = hit_point;
+						// glm::vec3 v0 = hit_point - hit_normal * 0.001f;
+						// float u = glm::fract(local_hit.x);
+						// float v = glm::fract(local_hit.y);
+						// u = glm::clamp(u, 0.0f, 1.0f);
+						// v = glm::clamp(v, 0.0f, 1.0f);
+						// mod_color = sampleTexture(*spidermanTex, u, v);
 					}
 				}
 			}
 			for (const auto& [node, triangleVertices] : meshes) {
+				// printf("mesh: %s\n", node->m_name.c_str());
+				if (node->m_name[0] == 's') {
+					continue;
+				}
 				float t;
 				glm::vec3 mesh_normal;
 
@@ -366,7 +590,7 @@ void A4_Render(
 			}
 			if (closest_t < std::numeric_limits<float>::max() && phongMaterial) {
 				glm::vec3 color = phongMaterial->m_kd * ambient;
-				if (mod_color != glm::vec3(0.0f)) {
+				if (use_colour_flag == true) {
 					color = mod_color * ambient;
 				}
 				for (const Light* light : lights) {
