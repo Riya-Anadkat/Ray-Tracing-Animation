@@ -26,7 +26,7 @@ mat4 = gr.material({0.7, 0.6, 1.0}, {0.5, 0.4, 0.8}, 25)
 red_light = gr.material({1.0, 0.2, 0.2}, {0.5, 0.5, 0.5}, 50, 0.0, 1.5)  -- Red light buildings
 
 scene_root = gr.node('root')
--- scene_root:translate(0, 0, 120)
+scene_root:translate(0, 0, 60)
 -- scene_root:rotate('Y', 3.0)
 -- scene_root:translate(0, 0, -20)
 
@@ -108,30 +108,24 @@ for j = 30, 50 do
 	box:set_material(glass_light10)
 end
 
-car1 = gr.mesh('car1', 'car.obj')
-scene_root:add_child(car1)
-car1:set_material(black_light)
-car1:translate(140, -178, 650)
-car1:scale(0.75,0.75,0.75)
+scar1 = gr.mesh('scar1', 'car.obj')
+scene_root:add_child(scar1)
+scar1:set_material(yellow_light)
+scar1:translate(143, -200, 800)
+-- scar1:translate(143, -200, 860)
+scar1:scale(0.55,0.55,0.75)
 
 
 white_light = gr.light({-100.0, -30.0, 750.0}, {0.9, 0.9, 0.9}, {1, 0, 0})
 
 sun_lights = {}
-for i = 1, 240 do
-	local intensity
-	local color
-	if i <= 120 then
-		intensity = 0.5 - (i - 1) * (0.5 / 119)  -- Gradually decrease intensity for the first 120
-		color = {intensity, intensity * 0.5, 0.0}  -- Adjust color to simulate sunset
-	else
-			intensity = 0.0  -- Keep it dark after sunset
-			color = {0.0, 0.0, 0.0}  -- Simulate complete darkness
-		end
+for i = 1, 120 do
+	local intensity = 0.5 - (i - 1) * (0.5 / 119)  -- Gradually decrease intensity
+	local color = {intensity, intensity * 0.5, 0.0}  -- Adjust color to simulate sunset
 	sun_lights[i] = gr.light({-750.0, 30.0, 900.0}, color, {1, 0, 0})
 end
 
--- frame 0143
+
 gr.render(scene_root, 'frames/frame_0000.png', 500, 500,
 	  {0, 0, 800}, {0, 0, -1}, {0, 1, 0}, 50,
-	  {0.3, 0.3, 0.3}, {white_light, sun_lights[140]})
+	  {0.3, 0.3, 0.3}, {white_light, sun_lights[1]})

@@ -30,6 +30,7 @@ std::vector<std::pair<SceneNode*, std::pair<glm::vec3, glm::vec3>>> spheres;
 std::vector<std::pair<SceneNode*, std::pair<glm::vec3, glm::vec3>>> cubes;
 std::vector<std::pair<SceneNode*, std::vector<glm::vec3>>> meshes;
 std::vector<std::pair<SceneNode*, BVHNode*>> meshBVHs;
+std::unordered_map<SceneNode*, glm::vec3> nodeVelocities;
 
 float epislon = 0.01f;
 
@@ -390,6 +391,7 @@ void getNodes(SceneNode* node, glm::mat4 transform = glm::mat4(1.0f)) {
 			}
 			BVHNode* bvh = buildBVH(transformedTriangles);
 			if (geometryNode->m_name[0] == 's' || geometryNode->m_name[0] == 'c') {
+	
 				meshBVHs.emplace_back(geometryNode, bvh);
 			}
 
@@ -534,8 +536,76 @@ void A4_Render(
 
 						bool is_lit = rand < 0.3f;
 
+						
+
+						
 						if (is_window) {
-							if (is_lit) {
+							if(reflection_flag){
+								glm::vec3 reflect_dir = glm::reflect(ray.direction, hit_normal);
+								Ray reflected_ray(hit_point + reflect_dir * epislon, reflect_dir);
+						
+								float t_reflect = std::numeric_limits<float>::max();
+								glm::vec3 n_reflect, p_reflect;
+								PhongMaterial* m_reflect = nullptr;
+								glm::vec3 reflected_color = glm::vec3(0.0f);
+						
+								// Find the closest reflection hit
+								for (const auto& [node2, sphere] : spheres) {
+									float t;
+									if (checkIntersectSpheres(sphere.first, sphere.second, reflected_ray, t) && t < t_reflect) {
+										t_reflect = t;
+										p_reflect = reflected_ray.origin + t * reflected_ray.direction;
+										n_reflect = glm::normalize((p_reflect - sphere.first) / sphere.second);
+										m_reflect = nodeMaterials[node2];
+									}
+								}
+								for (const auto& [node2, cube2] : cubes) {
+									float t;
+									glm::vec3 normal2;
+									if (checkIntresectCube(cube2.first, cube2.second, reflected_ray, t, normal2) && t < t_reflect) {
+										t_reflect = t;
+										p_reflect = reflected_ray.origin + t * reflected_ray.direction;
+										n_reflect = normal2;
+										m_reflect = nodeMaterials[node2];
+									}
+								}
+								for (const auto& [node2, bvh] : meshBVHs) {
+									if (intersectBVH(bvh, reflected_ray, t_reflect, n_reflect, p_reflect)) {
+										m_reflect = nodeMaterials[node2];
+									}
+								}
+								for (const auto& [node2, tri] : meshes) {
+									if (node2->m_name[0] == 's') continue;
+									float t;
+									glm::vec3 n_temp;
+									for (size_t i = 0; i < tri.size(); i += 3) {
+										if (checkIntersectTriangle(tri[i], tri[i+1], tri[i+2], reflected_ray, t, n_temp) && t < t_reflect) {
+											t_reflect = t;
+											p_reflect = reflected_ray.origin + t * reflected_ray.direction;
+											n_reflect = n_temp;
+											m_reflect = nodeMaterials[node2];
+										}
+									}
+								}
+						
+								if (m_reflect) {
+									// Simple diffuse reflection (ambient only)
+									reflected_color = m_reflect->m_kd ;
+								} 
+								else {
+									// Reflect the sky
+									float t = 0.5f * reflect_dir.y + 0.5f;
+									reflected_color = (1.0f - t) * glm::vec3(1.0, 0.55, 0.25) + t * glm::vec3(0.6, 0.8, 1.0);
+
+								}
+								// Blend the reflection with base window color
+								mod_color = 0.3f * mod_color + 0.7f * reflected_color;
+								//mod_color = 0.1f * mod_color + 0.9f * reflected_color;
+
+								use_colour_flag = true;
+	
+							}
+							else if (is_lit) {
 								mod_color = glm::vec3(1.0f, 0.85f, 0.6f);
 							}
 							else {
@@ -546,6 +616,7 @@ void A4_Render(
 							// mod_color *= 0.8f;
 							mod_color = 0.5 * mod_color + 0.5 * sampleTexture(*brickTex, u, v);
 						}
+					
 					}
 				}
 			}
@@ -556,6 +627,10 @@ void A4_Render(
 					if (node->m_name[0] == 's') {
 						mod_color = phongMaterial->m_kd;
 						use_colour_flag = true;
+
+						
+
+
 						// glm::vec3 local_hit = hit_point;
 						// glm::vec3 v0 = hit_point - hit_normal * 0.001f;
 						// float u = glm::fract(local_hit.x);
@@ -617,8 +692,8 @@ void A4_Render(
 			else {
 				float t = py * 0.5f + 0.5f;
 
-				glm::vec3 sky_top = glm::vec3(1.0, 0.55, 0.25);
-				glm::vec3 sky_bottom = glm::vec3(0.6, 0.8, 1.0);
+				glm::vec3 sky_top = glm::vec3(1.0, 0.4, 0.0);  // more orange
+				glm::vec3 sky_bottom = glm::vec3(0.4, 0.7, 1.0);//blue
 
 				glm::vec3 sky_color = (1.0f - t) * sky_top + t * sky_bottom;
 
