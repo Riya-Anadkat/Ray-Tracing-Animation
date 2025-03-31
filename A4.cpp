@@ -14,6 +14,7 @@
 #include <algorithm>
 
 bool reflection_flag = true;
+float global_time = 40.0f;
 
 struct BVHNode {
 	glm::vec3 bbox_min, bbox_max;
@@ -42,7 +43,8 @@ struct Texture {
 struct Ray {
 	glm::vec3 origin;
 	glm::vec3 direction;
-	Ray(const glm::vec3& origin, const glm::vec3& direction) : origin(origin), direction(direction) {}
+	float time;
+	Ray(const glm::vec3& origin, const glm::vec3& direction, float time = 0.0f) : origin(origin), direction(direction), time(time) {}
 };
 
 glm::vec3 sampleTexture(const Texture& tex, float u, float v) {
@@ -50,7 +52,7 @@ glm::vec3 sampleTexture(const Texture& tex, float u, float v) {
 	v = glm::clamp(v, 0.0f, 1.0f);
 	int x = int(u * (tex.width - 1));
 	int y = int(v * (tex.height - 1));
-	return tex.data[y * tex.width + x];  // row-major order
+	return tex.data[y * tex.width + x];  
 }
 
 Texture loadPPM(const std::string& filename) {
@@ -370,28 +372,36 @@ void getNodes(SceneNode* node, glm::mat4 transform = glm::mat4(1.0f)) {
 			std::vector<glm::vec3> transformedTriangles;
 			glm::mat3 normalMatrix = glm::transpose(glm::inverse(glm::mat3(currentTransform)));
 
+			glm::vec3 velocity(0.0f);
+			if (nodeVelocities.count(geometryNode)) {
+				velocity = nodeVelocities[geometryNode];
+			}
+			glm::vec3 motion_offset = velocity * global_time;
+			// if (node->m_name[0] == 's') {
+			// 	printf("Motion offset: %f %f %f\n", motion_offset.x, motion_offset.y, motion_offset.z);
+			// }
 			size_t num_vertices = mesh->m_vertices.size();
 
 			for (const auto& triangle : mesh->m_faces) {
-		
+
 				if (triangle.v1 >= num_vertices || triangle.v2 >= num_vertices || triangle.v3 >= num_vertices) {
 					std::cerr << "Invalid triangle indices in mesh: "
 						<< triangle.v1 << ", " << triangle.v2 << ", " << triangle.v3
 						<< " (vertex count: " << num_vertices << ")" << std::endl;
-					continue; 
+					continue;
 				}
 
-				glm::vec3 v0 = glm::vec3(currentTransform * glm::vec4(mesh->m_vertices[triangle.v1], 1.0f));
-				glm::vec3 v1 = glm::vec3(currentTransform * glm::vec4(mesh->m_vertices[triangle.v2], 1.0f));
-				glm::vec3 v2 = glm::vec3(currentTransform * glm::vec4(mesh->m_vertices[triangle.v3], 1.0f));
+				glm::vec3 v0 = glm::vec3(currentTransform * glm::vec4(mesh->m_vertices[triangle.v1], 1.0f)) + motion_offset;
+				glm::vec3 v1 = glm::vec3(currentTransform * glm::vec4(mesh->m_vertices[triangle.v2], 1.0f)) + motion_offset;
+				glm::vec3 v2 = glm::vec3(currentTransform * glm::vec4(mesh->m_vertices[triangle.v3], 1.0f)) + motion_offset;
 
 				transformedTriangles.push_back(v0);
 				transformedTriangles.push_back(v1);
 				transformedTriangles.push_back(v2);
 			}
-			BVHNode* bvh = buildBVH(transformedTriangles);
+
 			if (geometryNode->m_name[0] == 's' || geometryNode->m_name[0] == 'c') {
-	
+				BVHNode* bvh = buildBVH(transformedTriangles);
 				meshBVHs.emplace_back(geometryNode, bvh);
 			}
 
@@ -408,6 +418,289 @@ void getNodes(SceneNode* node, glm::mat4 transform = glm::mat4(1.0f)) {
 		getNodes(child, currentTransform);
 	}
 }
+
+glm::vec3 traceRay(
+	const Ray& ray,
+	const glm::vec3& eye,
+	const glm::vec3& ambient,
+	const std::list<Light*>& lights,
+	Texture* brickTex,
+	Texture* groundTex,
+	int x,
+	int y,
+	float px,
+	float py
+) {
+	float closest_t = std::numeric_limits<float>::max();
+	glm::vec3 hit_normal, hit_point;
+	PhongMaterial* phongMaterial = nullptr;
+	glm::vec3 mod_color = glm::vec3(0.0f);
+	bool use_colour_flag = false;
+
+	for (const auto& [node, sphere] : spheres) {
+		float t;
+		if (checkIntersectSpheres(sphere.first, sphere.second, ray, t) && t < closest_t) {
+			closest_t = t;
+			hit_point = ray.origin + t * ray.direction;
+			hit_normal = glm::normalize((hit_point - sphere.first) / sphere.second);
+			phongMaterial = nodeMaterials[node];
+		}
+	}
+
+	for (const auto& [node, cube] : cubes) {
+		float t;
+		glm::vec3 cube_normal;
+		if (checkIntresectCube(cube.first, cube.second, ray, t, cube_normal) && t < closest_t) {
+			closest_t = t;
+			hit_point = ray.origin + t * ray.direction;
+			hit_normal = cube_normal;
+			phongMaterial = nodeMaterials[node];
+			// printf("cube name: %s\n", node->m_name.c_str());
+			
+			if (node->m_name[0] == 'b') {
+
+				use_colour_flag = true;
+				mod_color = phongMaterial->m_kd;
+
+
+				glm::vec3 local_hit = hit_point - cube.first;
+				glm::vec3 cube_size = cube.second - cube.first;
+
+				glm::vec3 uv = local_hit / cube_size;
+				float u = 0.0f, v = 0.0f;
+				auto fract = [](float x) { return x - floor(x); };
+
+				int windows_per_face = 10;
+				float window_unit = 1.0f / windows_per_face;
+				float window_size = window_unit * 0.6f;
+
+				bool is_window = false;
+
+				int tile_x = 0, tile_y = 0;
+
+				if (glm::abs(hit_normal.x) > 0.9f) {
+					u = uv.z;
+					v = uv.y;
+					tile_x = int(uv.y / window_unit);
+					tile_y = int(uv.z / window_unit);
+					is_window = fract(uv.y / window_unit) < (window_size / window_unit) &&
+						fract(uv.z / window_unit) < (window_size / window_unit);
+				}
+				else if (glm::abs(hit_normal.y) > 0.9f) {
+					u = uv.x;
+					v = uv.z;
+					tile_x = int(uv.x / window_unit);
+					tile_y = int(uv.z / window_unit);
+					is_window = fract(uv.x / window_unit) < (window_size / window_unit) &&
+						fract(uv.z / window_unit) < (window_size / window_unit);
+				}
+				else if (glm::abs(hit_normal.z) > 0.9f) {
+					u = uv.x;
+					v = uv.y;
+					tile_x = int(uv.x / window_unit);
+					tile_y = int(uv.y / window_unit);
+					is_window = fract(uv.x / window_unit) < (window_size / window_unit) &&
+						fract(uv.y / window_unit) < (window_size / window_unit);
+				}
+
+				int seed = int(cube.first.x + cube.first.y + cube.first.z + tile_x * 13 + tile_y * 17);
+				float rand = fract(sin(seed * 91.345f) * 47453.0f);
+
+				bool is_lit = rand < 0.01f;
+
+
+
+
+				if (is_window) {
+					if (reflection_flag) {
+						glm::vec3 reflect_dir = glm::reflect(ray.direction, hit_normal);
+						Ray reflected_ray(hit_point + reflect_dir * epislon, reflect_dir);
+
+						float t_reflect = std::numeric_limits<float>::max();
+						glm::vec3 n_reflect, p_reflect;
+						PhongMaterial* m_reflect = nullptr;
+						glm::vec3 reflected_color = glm::vec3(0.0f);
+
+						for (const auto& [node2, sphere] : spheres) {
+							float t;
+							if (checkIntersectSpheres(sphere.first, sphere.second, reflected_ray, t) && t < t_reflect) {
+								t_reflect = t;
+								p_reflect = reflected_ray.origin + t * reflected_ray.direction;
+								n_reflect = glm::normalize((p_reflect - sphere.first) / sphere.second);
+								m_reflect = nodeMaterials[node2];
+							}
+						}
+						for (const auto& [node2, cube2] : cubes) {
+							float t;
+							glm::vec3 normal2;
+							if (checkIntresectCube(cube2.first, cube2.second, reflected_ray, t, normal2) && t < t_reflect) {
+								t_reflect = t;
+								p_reflect = reflected_ray.origin + t * reflected_ray.direction;
+								n_reflect = normal2;
+								m_reflect = nodeMaterials[node2];
+							}
+						}
+						for (const auto& [node2, bvh] : meshBVHs) {
+							if (intersectBVH(bvh, reflected_ray, t_reflect, n_reflect, p_reflect)) {
+								m_reflect = nodeMaterials[node2];
+							}
+						}
+						for (const auto& [node2, tri] : meshes) {
+							if (node2->m_name[0] == 's') continue;
+							float t;
+							glm::vec3 n_temp;
+							for (size_t i = 0; i < tri.size(); i += 3) {
+								if (checkIntersectTriangle(tri[i], tri[i + 1], tri[i + 2], reflected_ray, t, n_temp) && t < t_reflect) {
+									t_reflect = t;
+									p_reflect = reflected_ray.origin + t * reflected_ray.direction;
+									n_reflect = n_temp;
+									m_reflect = nodeMaterials[node2];
+								}
+							}
+						}
+
+						if (m_reflect) {
+							reflected_color = m_reflect->m_kd;
+						}
+						else {
+							float t = 0.5f * reflect_dir.y + 0.5f;
+							reflected_color = (1.0f - t) * glm::vec3(1.0, 0.55, 0.25) + t * glm::vec3(0.6, 0.8, 1.0);
+
+						}
+						mod_color = 0.3f * mod_color + 0.7f * reflected_color;
+						//mod_color = 0.1f * mod_color + 0.9f * reflected_color;
+						if(is_lit){
+							mod_color = 0.4f * mod_color + 0.6f * glm::vec3(1.0, 0.85, 0.6);
+							//mod_color = 0.4f * mod_color + 0.6f * glm::vec3(1.0, 0.85, 0.6);
+
+						}
+						else{
+							mod_color *= 0.7f;
+							//mod_color *= 0.8f;
+						}
+						use_colour_flag = true;
+
+					}
+					else if (is_lit) {
+						mod_color = glm::vec3(1.0f, 0.85f, 0.6f);
+						use_colour_flag = true;
+					}
+					else {
+						mod_color *= 0.4f;
+						use_colour_flag = true;
+					}
+				}
+				else {
+					// mod_color *= 0.8f;
+					mod_color = 0.5 * mod_color + 0.5 * sampleTexture(*brickTex, u, v);
+				}
+
+			}
+		}
+	}
+	for (const auto& [node, bvh] : meshBVHs) {
+		if (intersectBVH(bvh, ray, closest_t, hit_normal, hit_point)) {
+			phongMaterial = nodeMaterials[node];
+			// printf("mesh: %s\n", node->m_name.c_str());
+			if (node->m_name[0] == 's') {
+				mod_color = phongMaterial->m_kd;
+				use_colour_flag = true;
+
+
+			}
+		}
+	}
+	for (const auto& [node, triangleVertices] : meshes) {
+		// printf("mesh: %s\n", node->m_name.c_str());
+		if (node->m_name[0] == 's') {
+			continue;
+		}
+		float t;
+		glm::vec3 mesh_normal;
+
+		for (size_t i = 0; i < triangleVertices.size(); i += 3) {
+			if (checkIntersectTriangle(
+				triangleVertices[i],
+				triangleVertices[i + 1],
+				triangleVertices[i + 2],
+				ray, t, mesh_normal) && t < closest_t) {
+
+				closest_t = t;
+				hit_point = ray.origin + t * ray.direction;
+				hit_normal = mesh_normal;
+				phongMaterial = nodeMaterials[node];
+
+				if(node->m_name[0] == 'r'){
+					mod_color = phongMaterial->m_kd;
+					use_colour_flag = true;
+
+					glm::vec3 local_hit = hit_point;
+					glm::vec3 v0 = hit_point - hit_normal * 0.001f;
+					float u = glm::fract(local_hit.x);
+					float v = glm::fract(local_hit.y);
+					u = glm::clamp(u, 0.0f, 1.0f);
+					v = glm::clamp(v, 0.0f, 1.0f);
+					mod_color = 0.9 * mod_color + 0.1 * sampleTexture(*groundTex, u, v);
+
+					// mod_color = sampleTexture(*groundTex, u, v);
+
+					
+				}
+			}
+		}
+	}
+	if (closest_t < std::numeric_limits<float>::max() && phongMaterial) {
+		glm::vec3 color = phongMaterial->m_kd * ambient;
+		if (use_colour_flag == true) {
+			color = mod_color * ambient;
+		}
+		for (const Light* light : lights) {
+			if (!shouldBeInShadow(hit_point, light->position)) {
+				glm::vec3 light_dir = glm::normalize(light->position - hit_point);
+				float diff = glm::max(glm::dot(hit_normal, light_dir), 0.0f);
+				glm::vec3 diffuse = diff * light->colour * phongMaterial->m_kd;
+
+				glm::vec3 view_dir = glm::normalize(eye - hit_point);
+				glm::vec3 reflect_dir = glm::reflect(-light_dir, hit_normal);
+				float spec = pow(glm::max(glm::dot(view_dir, reflect_dir), 0.0f), phongMaterial->m_shininess);
+				glm::vec3 specular = spec * light->colour * phongMaterial->m_ks;
+
+				color += diffuse + specular;
+			}
+		}
+
+		color = glm::clamp(color, 0.0f, 1.0f);
+
+		return color;
+	}
+	else {
+		float t = py * 0.5f + 0.5f;
+
+		glm::vec3 sky_top = glm::vec3(1.0, 0.4, 0.0);  
+		glm::vec3 sky_bottom = glm::vec3(0.10, 0.35, 0.65); 
+
+		glm::vec3 sky_color = (1.0f - t) * sky_top + t * sky_bottom;
+
+		sky_color *= 0.55; 
+		float cloud = 0.0f;
+
+		cloud += 0.15f * sin(py * 40.0f + 0.5f * sin(px * 10.0f));
+		cloud += 0.08f * sin(py * 60.0f + 2.0f * px);
+		cloud *= 1.0f - 0.8f * px;
+		float verticalGradient = 1.0f + 0.4f * px;
+		cloud += 0.08f * sin((py + verticalGradient) * 40.0f + 0.5f * sin(px * 10.0f));
+		cloud += 0.04f * sin((py + verticalGradient) * 60.0f + 2.0f * px);
+		cloud *= 0.1f; 
+
+		cloud = clamp(cloud, 0.0f, 1.0f);
+
+		glm::vec3 cloud_color = glm::vec3(1.0f, 1.0f, 1.0f);
+		glm::vec3 final_color = mix(sky_color, cloud_color, cloud);
+
+		return final_color;
+	}
+}
+
 
 void A4_Render(
 	// What to render  
@@ -431,291 +724,67 @@ void A4_Render(
 	meshes.clear();
 	meshBVHs.clear();
 	nodeMaterials.clear();
+	nodeVelocities.clear();
 
-	Texture* brickTex = new Texture(loadPPM("brick_texture.ppm"));
-	Texture* spidermanTex = new Texture(loadPPM("spiderman_suit.ppm"));
+	for (SceneNode* node : root->children) {
+		if (node->m_name[0] == 's') {
+			nodeVelocities[node] = glm::vec3(0.0f, 0.0f, 0.0f);
+		}
+	}
+
+	Texture brickTex = loadPPM("brick_texture.ppm");
+	Texture groundTex = loadPPM("ground.ppm");
 
 	size_t width = image.width();
 	size_t height = image.height();
-	float aspect = width / (float)height;
+	float aspect = width / float(height);
 	float scale = tan(glm::radians(fovy / 2.0f));
 
 	glm::vec3 w = glm::normalize(eye - view);
 	glm::vec3 u = glm::normalize(glm::cross(up, w));
 	glm::vec3 v = glm::cross(w, u);
 
-	getNodes(root);
+	int samples = 1;
 
-	// for (size_t y = 0; y < height; y++) {
-	omp_set_num_threads(100);
-#pragma omp parallel for schedule(dynamic)
-	for (int y = 0; y < static_cast<int>(height); y++) {
-		int thread_id = omp_get_thread_num();
-		// printf("Row %d computed by thread %d\n", y, thread_id);
+	std::vector<glm::vec3> pixel_colors(width * height, glm::vec3(0.0f));
 
-		for (int x = 0; x < static_cast<int>(width); x++) {
+	for (int s = 0; s < samples; ++s) {
+		float time = glm::linearRand(0.0f, 4.0f);
+		global_time = time;
 
-			float px = (2 * (x + 0.5) / (float)width - 1) * aspect * scale;
-			float py = (1 - 2 * (y + 0.5) / (float)height) * scale;
+		spheres.clear();
+		cubes.clear();
+		meshes.clear();
+		meshBVHs.clear();
+		nodeMaterials.clear();
+		getNodes(root);
+
+		omp_set_num_threads(8);
+		#pragma omp parallel for schedule(dynamic)
+		for (int i = 0; i < int(width * height); i++) {
+			int x = i % width;
+			int y = i / width;
+
+			float px = (2.0f * (x + 0.5f) / float(width) - 1.0f) * aspect * scale;
+			float py = (1.0f - 2.0f * (y + 0.5f) / float(height)) * scale;
+
 			glm::vec3 dir = glm::normalize(px * u + py * v - w);
-			Ray ray(eye, dir);
+			Ray ray(eye, dir, time);
 
-			float closest_t = std::numeric_limits<float>::max();
-			glm::vec3 hit_normal, hit_point;
-			PhongMaterial* phongMaterial = nullptr;
-			glm::vec3 mod_color = glm::vec3(0.0f);
-			bool use_colour_flag = false;
+			glm::vec3 color = traceRay(ray, eye, ambient, lights, &brickTex, &groundTex, x, y, px, py);
 
-			for (const auto& [node, sphere] : spheres) {
-				float t;
-				if (checkIntersectSpheres(sphere.first, sphere.second, ray, t) && t < closest_t) {
-					closest_t = t;
-					hit_point = ray.origin + t * ray.direction;
-					hit_normal = glm::normalize((hit_point - sphere.first) / sphere.second);
-					phongMaterial = nodeMaterials[node];
-				}
-			}
-
-			for (const auto& [node, cube] : cubes) {
-				float t;
-				glm::vec3 cube_normal;
-				if (checkIntresectCube(cube.first, cube.second, ray, t, cube_normal) && t < closest_t) {
-					closest_t = t;
-					hit_point = ray.origin + t * ray.direction;
-					hit_normal = cube_normal;
-					phongMaterial = nodeMaterials[node];
-					// printf("cube name: %s\n", node->m_name.c_str());
-					if (node->m_name[0] == 'b') {
-
-						use_colour_flag = true;
-						mod_color = phongMaterial->m_kd;
-
-
-						glm::vec3 local_hit = hit_point - cube.first;
-						glm::vec3 cube_size = cube.second - cube.first;
-
-						glm::vec3 uv = local_hit / cube_size;
-						float u = 0.0f, v = 0.0f;
-						auto fract = [](float x) { return x - floor(x); };
-
-						int windows_per_face = 10;
-						float window_unit = 1.0f / windows_per_face;
-						float window_size = window_unit * 0.6f;
-
-						bool is_window = false;
-
-						int tile_x = 0, tile_y = 0;
-
-						if (glm::abs(hit_normal.x) > 0.9f) {
-							u = uv.z;
-							v = uv.y;
-							tile_x = int(uv.y / window_unit);
-							tile_y = int(uv.z / window_unit);
-							is_window = fract(uv.y / window_unit) < (window_size / window_unit) &&
-								fract(uv.z / window_unit) < (window_size / window_unit);
-						}
-						else if (glm::abs(hit_normal.y) > 0.9f) {
-							u = uv.x;
-							v = uv.z;
-							tile_x = int(uv.x / window_unit);
-							tile_y = int(uv.z / window_unit);
-							is_window = fract(uv.x / window_unit) < (window_size / window_unit) &&
-								fract(uv.z / window_unit) < (window_size / window_unit);
-						}
-						else if (glm::abs(hit_normal.z) > 0.9f) {
-							u = uv.x;
-							v = uv.y;
-							tile_x = int(uv.x / window_unit);
-							tile_y = int(uv.y / window_unit);
-							is_window = fract(uv.x / window_unit) < (window_size / window_unit) &&
-								fract(uv.y / window_unit) < (window_size / window_unit);
-						}
-
-						int seed = int(cube.first.x + cube.first.y + cube.first.z + tile_x * 13 + tile_y * 17);
-						float rand = fract(sin(seed * 91.345f) * 47453.0f);
-
-						bool is_lit = rand < 0.3f;
-
-						
-
-						
-						if (is_window) {
-							if(reflection_flag){
-								glm::vec3 reflect_dir = glm::reflect(ray.direction, hit_normal);
-								Ray reflected_ray(hit_point + reflect_dir * epislon, reflect_dir);
-						
-								float t_reflect = std::numeric_limits<float>::max();
-								glm::vec3 n_reflect, p_reflect;
-								PhongMaterial* m_reflect = nullptr;
-								glm::vec3 reflected_color = glm::vec3(0.0f);
-						
-								// Find the closest reflection hit
-								for (const auto& [node2, sphere] : spheres) {
-									float t;
-									if (checkIntersectSpheres(sphere.first, sphere.second, reflected_ray, t) && t < t_reflect) {
-										t_reflect = t;
-										p_reflect = reflected_ray.origin + t * reflected_ray.direction;
-										n_reflect = glm::normalize((p_reflect - sphere.first) / sphere.second);
-										m_reflect = nodeMaterials[node2];
-									}
-								}
-								for (const auto& [node2, cube2] : cubes) {
-									float t;
-									glm::vec3 normal2;
-									if (checkIntresectCube(cube2.first, cube2.second, reflected_ray, t, normal2) && t < t_reflect) {
-										t_reflect = t;
-										p_reflect = reflected_ray.origin + t * reflected_ray.direction;
-										n_reflect = normal2;
-										m_reflect = nodeMaterials[node2];
-									}
-								}
-								for (const auto& [node2, bvh] : meshBVHs) {
-									if (intersectBVH(bvh, reflected_ray, t_reflect, n_reflect, p_reflect)) {
-										m_reflect = nodeMaterials[node2];
-									}
-								}
-								for (const auto& [node2, tri] : meshes) {
-									if (node2->m_name[0] == 's') continue;
-									float t;
-									glm::vec3 n_temp;
-									for (size_t i = 0; i < tri.size(); i += 3) {
-										if (checkIntersectTriangle(tri[i], tri[i+1], tri[i+2], reflected_ray, t, n_temp) && t < t_reflect) {
-											t_reflect = t;
-											p_reflect = reflected_ray.origin + t * reflected_ray.direction;
-											n_reflect = n_temp;
-											m_reflect = nodeMaterials[node2];
-										}
-									}
-								}
-						
-								if (m_reflect) {
-									// Simple diffuse reflection (ambient only)
-									reflected_color = m_reflect->m_kd ;
-								} 
-								else {
-									// Reflect the sky
-									float t = 0.5f * reflect_dir.y + 0.5f;
-									reflected_color = (1.0f - t) * glm::vec3(1.0, 0.55, 0.25) + t * glm::vec3(0.6, 0.8, 1.0);
-
-								}
-								// Blend the reflection with base window color
-								mod_color = 0.3f * mod_color + 0.7f * reflected_color;
-								//mod_color = 0.1f * mod_color + 0.9f * reflected_color;
-
-								use_colour_flag = true;
-	
-							}
-							else if (is_lit) {
-								mod_color = glm::vec3(1.0f, 0.85f, 0.6f);
-							}
-							else {
-								mod_color *= 0.4f;
-							}
-						}
-						else {
-							// mod_color *= 0.8f;
-							mod_color = 0.5 * mod_color + 0.5 * sampleTexture(*brickTex, u, v);
-						}
-					
-					}
-				}
-			}
-			for (const auto& [node, bvh] : meshBVHs) {
-				if (intersectBVH(bvh, ray, closest_t, hit_normal, hit_point)) {
-					phongMaterial = nodeMaterials[node];
-					// printf("mesh: %s\n", node->m_name.c_str());
-					if (node->m_name[0] == 's') {
-						mod_color = phongMaterial->m_kd;
-						use_colour_flag = true;
-
-						
-
-
-						// glm::vec3 local_hit = hit_point;
-						// glm::vec3 v0 = hit_point - hit_normal * 0.001f;
-						// float u = glm::fract(local_hit.x);
-						// float v = glm::fract(local_hit.y);
-						// u = glm::clamp(u, 0.0f, 1.0f);
-						// v = glm::clamp(v, 0.0f, 1.0f);
-						// mod_color = sampleTexture(*spidermanTex, u, v);
-					}
-				}
-			}
-			for (const auto& [node, triangleVertices] : meshes) {
-				// printf("mesh: %s\n", node->m_name.c_str());
-				if (node->m_name[0] == 's') {
-					continue;
-				}
-				float t;
-				glm::vec3 mesh_normal;
-
-				for (size_t i = 0; i < triangleVertices.size(); i += 3) {
-					if (checkIntersectTriangle(
-						triangleVertices[i],
-						triangleVertices[i + 1],
-						triangleVertices[i + 2],
-						ray, t, mesh_normal) && t < closest_t) {
-
-						closest_t = t;
-						hit_point = ray.origin + t * ray.direction;
-						hit_normal = mesh_normal;
-						phongMaterial = nodeMaterials[node];
-					}
-				}
-			}
-			if (closest_t < std::numeric_limits<float>::max() && phongMaterial) {
-				glm::vec3 color = phongMaterial->m_kd * ambient;
-				if (use_colour_flag == true) {
-					color = mod_color * ambient;
-				}
-				for (const Light* light : lights) {
-					if (!shouldBeInShadow(hit_point, light->position)) {
-						glm::vec3 light_dir = glm::normalize(light->position - hit_point);
-						float diff = glm::max(glm::dot(hit_normal, light_dir), 0.0f);
-						glm::vec3 diffuse = diff * light->colour * phongMaterial->m_kd;
-
-						glm::vec3 view_dir = glm::normalize(eye - hit_point);
-						glm::vec3 reflect_dir = glm::reflect(-light_dir, hit_normal);
-						float spec = pow(glm::max(glm::dot(view_dir, reflect_dir), 0.0f), phongMaterial->m_shininess);
-						glm::vec3 specular = spec * light->colour * phongMaterial->m_ks;
-
-						color += diffuse + specular;
-					}
-				}
-
-				color = glm::clamp(color, 0.0f, 1.0f);
-
-				image(x, y, 0) = color.r;
-				image(x, y, 1) = color.g;
-				image(x, y, 2) = color.b;
-			}
-			else {
-				float t = py * 0.5f + 0.5f;
-
-				glm::vec3 sky_top = glm::vec3(1.0, 0.4, 0.0);  // more orange
-				glm::vec3 sky_bottom = glm::vec3(0.4, 0.7, 1.0);//blue
-
-				glm::vec3 sky_color = (1.0f - t) * sky_top + t * sky_bottom;
-
-				float cloud = 0.0f;
-
-				cloud += 0.2f * sin(py * 40.0f + 0.5f * sin(px * 10.0f));
-				cloud += 0.1f * sin(py * 60.0f + 2.0f * px);
-				cloud *= 1.0f - px;
-				float verticalGradient = 1.0f + 0.5f * px;
-				cloud += 0.1f * sin((py + verticalGradient) * 40.0f + 0.5f * sin(px * 10.0f));
-				cloud += 0.05f * sin((py + verticalGradient) * 60.0f + 2.0f * px);
-
-				cloud = clamp(cloud, 0.0f, 1.0f);
-
-				glm::vec3 cloud_color = glm::vec3(1.0f, 1.0f, 1.0f);
-				glm::vec3 final_color = mix(sky_color, cloud_color, cloud);
-
-				image(x, y, 0) = final_color.r;
-				image(x, y, 1) = final_color.g;
-				image(x, y, 2) = final_color.b;
-			}
+			#pragma omp critical
+			pixel_colors[i] += color;
 		}
 	}
-}
 
+	for (size_t i = 0; i < width * height; ++i) {
+		int x = i % width;
+		int y = i / width;
+		glm::vec3 avg_color = pixel_colors[i] / float(samples);
+		avg_color = glm::clamp(avg_color, 0.0f, 1.0f);
+		image(x, y, 0) = avg_color.r;
+		image(x, y, 1) = avg_color.g;
+		image(x, y, 2) = avg_color.b;
+	}
+}
